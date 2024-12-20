@@ -47,3 +47,12 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+/.quarto/
+
+# personal notes
+notes*/**
+
+# downloaded dataset from kaggle and extracted folders
+child-mind-institute-problematic-internet-use.zip
+child-mind-institute-problematic-internet-use*/**
