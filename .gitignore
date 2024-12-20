@@ -20,6 +20,8 @@
 
 # RStudio files
 .Rproj.user/
+*.Rproj
+.Rprofile
 
 # produced vignettes
 vignettes/*.html
@@ -55,4 +57,11 @@ notes*/**
 
 # downloaded dataset from kaggle and extracted folders
 child-mind-institute-problematic-internet-use.zip
-child-mind-institute-problematic-internet-use*/**
+
+# extracted from the zip file
+extracted_files*/**
+
+# jupyter file generated from rendering to html
+index.quarto_ipynb
+
+.tmp*/**
