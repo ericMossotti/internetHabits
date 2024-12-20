@@ -1,0 +1,21 @@
+project:
+     type: manuscript
+     
+website:
+     comments:
+          hypothesis:
+               theme: clean
+               openSidebar: false
+
+bibliography:
+     - bibliography/refs.bib
+
+format:
+  html:
+    theme:
+       - darkly
+       - 'scss/main.scss'
+    toc: false
+    page-layout: article
+    docx: default
+    jats: default

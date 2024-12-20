@@ -1,0 +1,567 @@
+---
+title: "Internet Use, Physical Activity, and Problematic Behavor in Children"
+authors:
+  - name: Eric Mossotti
+    affiliation: none
+    roles: data
+    corresponding: true
+format: html
+jupyter: python3
+---
+
+```{python}
+1+1
+```
+
+Bash kaggle command to import the .zip file data to the local directory.
+
+```{python}
+#| eval: false
+!kaggle competitions download -c child-mind-institute-problematic-internet-use 
+```
+
+```{python}
+import zipfile
+import os
+
+zip_path = "child-mind-institute-problematic-internet-use.zip"
+
+try:
+     os.mkdir("extracted_files")
+     with zipfile.ZipFile(zip_path) as zf:
+          zipfile.ZipFile.extractall(zf, path = "extracted_files")
+          print(f"Directory, 'extracted_files/' created.")
+          
+except FileExistsError:
+     print(f"Directory already exists, skipped extraction to extracted_files . .")
+```
+
+```{python}
+import duckdb
+import pandas as pd
+
+#conn = duckdb.connect('database/data.duckdb')
+conn = duckdb.connect(':memory:')
+conn.execute(f"SET memory_limit = '24GB';")
+conn.execute(f"SET default_order = 'ASC';")
+```
+
+```{python}
+#%load 'scripts/DuckDBEnumTypeCreator.py'
+from scripts.DuckDBEnumTypeCreator import *
+
+
+enum_destructor = DuckDBEnumTypeCreator(conn)
+
+enums = ['sii_enum', 'age_enum', 'sex_enum', 'pciat_season_enum', 'weekday_enum', 'quarter_enum', 'hour_enum', 'minute_enum', 'second_enum', 'id_actigraphy_enum']
+
+print(f"d r o p p i n g . . .")
+for e in enums:
+  enum_destructor.try_drop(e)
+
+enum_creator = DuckDBEnumTypeCreator(conn)
+
+#siiSeries = pd.Series(data = ['None', 'Mild', 'Moderate', 'Severe'], dtype = str)
+siiSeries = pd.Series(data = ['0', '1', '2', '3'], dtype = str)
+
+ageSeries = pd.Series(data = range(5, 23), dtype = str)
+sexSeries = pd.Series(data = ['0', '1'], dtype = str)
+pciatSeasonSeries = pd.Series(data = ['Fall', 'Spring', 'Summer', 'Winter'], dtype = str)
+
+internetHrsSeries = pd.Series(data = ['0', '1', '2', '3'], dtype = str)
+
+quarterSeries = pd.Series(data = range(1, 5), dtype = str)
+weekdaySeries = pd.Series(data = range(1, 8), dtype = str)
+
+hourSeries = pd.Series(data = range(0, 24), dtype = str)
+minuteSeries = pd.Series(data = range(0, 60), dtype = str)
+secondSeries = pd.Series(data = range(0, 60), dtype = str)
+
+diseaseRiskSeries = pd.Series(data = ['Underweight', 'Normal', 'Increased', 'High', 'Very High', 'Extremely High'], dtype = str)
+
+id_df = conn.execute(f"""
+     SELECT 
+          DISTINCT(id) AS id
+     FROM 
+          read_parquet(
+               'extracted_files/series_train*/*/*',
+     hive_partitioning = true) 
+     ORDER BY 
+          id ASC;
+     """).df() 
+
+idList = id_df['id'].to_list()
+idSeries = pd.Series(data = idList, dtype = str)
+
+enumDict = {
+  'disease_risk_enum': f"{tuple(diseaseRiskSeries)}",
+  'enroll_season_enum': f"{tuple(pciatSeasonSeries)}",
+  'sii_enum': f"{tuple(siiSeries)}",
+  'age_enum': f"{tuple(ageSeries)}",
+  'sex_enum': f"{tuple(sexSeries)}",
+  'pciat_season_enum': f"{tuple(pciatSeasonSeries)}",
+  'quarter_enum': f"{tuple(quarterSeries)}",
+  'weekday_enum': f"{tuple(weekdaySeries)}",
+  'hour_enum': f"{tuple(hourSeries)}",
+  'minute_enum': f"{tuple(minuteSeries)}",
+  'second_enum': f"{tuple(secondSeries)}",
+  'id_actigraphy_enum': f"{tuple(idSeries)}",
+  'internet_hours_enum': f"{tuple(internetHrsSeries)}"
+  }
+
+print(f"\nc r e a t i n g . . .")
+for type_str, enum_str in enumDict.items():
+  enum_creator.try_create(type_str, enum_str)
+```
+
+```{python}
+import pandas as pd
+
+trainCsvDf = pd.read_csv(
+  "extracted_files/train.csv")
+
+testCsvDf = pd.read_csv(
+  "extracted_files/test.csv")
+  
+dictDf = pd.read_csv(
+  "extracted_files/data_dictionary.csv")
+```
+
+```{python}
+
+trainCsvDf.columns = trainCsvDf.columns.str.replace('-','_') 
+trainCsvDf.columns = trainCsvDf.columns.str.lower() 
+
+testCsvDf.columns = testCsvDf.columns.str.replace('-','_') 
+testCsvDf.columns = testCsvDf.columns.str.lower() 
+
+dictDf.Field = dictDf.Field.replace("-", "_", regex = True)
+
+csvDict = {
+  "TrainCsv": trainCsvDf,
+  "TestCsv": testCsvDf,
+  "DataDict": dictDf
+  }
+
+parquetDict = {
+  "ActigraphyTrain": 'extracted_files/series_train.parquet*/*/*',
+  "ActigraphyTest": 'extracted_files/series_test*/*/*'
+  }
+```
+
+```{python}
+#import pyarrow as pa
+#import pyarrow.dataset as ds
+%load "scripts/setup_duckdb_pipeline.py"
+from scripts.setup_duckdb_pipeline import *
+
+setup_duckdb_pipeline(csvDict, parquetDict, conn)
+```
+
+```{python}
+coltype_overview = conn.execute(f"""
+  SELECT column_name, data_type
+  FROM information_schema.columns
+  WHERE table_name = 'TrainCsv';
+""").df()
+
+# map the column names with data types
+col_dict = dict(zip(coltype_overview.column_name, coltype_overview.data_type))
+```
+
+```{python}
+regex_dict_train = {
+  "Demographic": "^id|^sii|^basic\S+",
+  "Physical": "^id|^sii|^physical\S+",
+  "FgVital": "^id|^sii|^fitness_E\S+",
+  "FgChild": "^id|^sii|^fgc\S+",
+  "Bia": "^id|^sii|^bia\S+",
+  "Paqa": "^id|^sii|^paq_a\S+",
+  "Pciat": "^id|^sii|^pciat\S+", 
+  "Sds": "^id|^sii|^sds\S+",
+  "InternetUse": "^id|^sii|^preint\S+"
+  }
+  
+regex_dict_test = {
+  "Demographic_OfTest": "^id|^basic\S+",
+  "Physical_OfTest": "^id|^physical\S+",
+  "FgVital_OfTest": "^id|^fitness_E\S+",
+  "FgChild_OfTest": "^id|^fgc\S+",
+  "Bia_OfTest": "^id|^bia\S+",
+  "Paqa_OfTest": "^id|^paq_a\S+",
+ # "Pciat_OfTest": "^id|^pciat\S+", 
+  "Sds_OfTest": "^id|^sds\S+",
+  "InternetUse_OfTest": "^id|^preint\S+"
+  }
+```
+
+```{r}
+#| file: "scripts/create_with_regex.py"
+```
+
+```{python}
+import re
+%load "scripts/create_with_regex.py"
+from scripts.create_with_regex import *
+
+for new_table_name, regex_pattern in regex_dict_train.items():
+  create_table_with_regex_columns(
+    conn, 
+    'TrainCsv', 
+    new_table_name, 
+    regex_pattern, 
+    col_dict
+    ) 
+
+for new_table_name, regex_pattern in regex_dict_test.items():
+  create_table_with_regex_columns(
+    conn, 
+    'TestCsv', 
+    new_table_name, 
+    regex_pattern, 
+    col_dict
+    )
+```
+
+Replace time_of_day with hour_of_day as a float. From this we can do any time series analysis desired. 
+
+```{python}
+# the large number is 3.6 * (10 ** 12)
+conn.execute(f"""
+CREATE OR REPLACE TABLE ActigraphyTrain AS
+SELECT 
+  * EXCLUDE (time_of_day),
+  (time_of_day / 3600000000000) AS hour_of_day
+FROM 
+  ActigraphyTrain;
+  """)
+```
+
+```{python}
+conn.sql(f"""
+CREATE OR REPLACE TABLE 
+  Analysis 
+AS
+  SELECT
+    * EXCLUDE(
+      basic_demos_enroll_season
+      ,basic_demos_age
+      ,basic_demos_sex
+      ,sii
+      )
+    ,basic_demos_enroll_season::TEXT::enroll_season_enum AS enroll_season
+    ,basic_demos_age::TEXT::age_enum AS age
+    ,basic_demos_sex::TEXT AS sex
+    ,sii::INTEGER::TEXT::sii_enum AS sii
+  FROM 
+    Demographic
+  ORDER BY
+    id ASC;
+  """)
+```
+
+
+```{python}
+conn.sql(f"""
+CREATE OR REPLACE TABLE 
+  Analysis
+AS
+  SELECT
+    at.id
+    ,ay.* EXCLUDE (id)
+    ,at.hour_of_day
+    ,at.light
+  FROM 
+    ActigraphyTrain at 
+  LEFT JOIN 
+    Analysis ay
+  ON 
+    ay.id = at.id;
+    """)
+```
+
+Programmatically extract the time of day column's quartile related info for future analysis.
+
+```{python}
+
+def quartiler (
+  conn: duckdb.duckdb, 
+  col_name: str, 
+  source_name: str) -> dict:
+  """
+  INPUTS:
+    DuckDB connection, column name, and source name
+    
+  RETURNS: 
+    A dictionary object with values represented by intuitive key labels.
+  """
+
+  summaryDf = conn.sql(f"""
+  SUMMARIZE
+  SELECT
+    {col_name}
+  FROM 
+    {source_name};""").df()
+
+  quartileDict = {
+    'min': summaryDf['min'][0]
+    ,'Q1': summaryDf.q25[0]
+    ,'Q2': summaryDf.q50[0]
+    ,'Q3': summaryDf.q75[0]
+    ,'max': summaryDf['max'][0]
+    }
+  
+  return quartileDict
+```
+
+```{python}
+x = quartiler(conn, 'hour_of_day', 'ActigraphyTrain')
+```
+
+Further filter by using the desired quartile bounds for exploring possible relationships between parameters. Create a new column that can now be used in the csv derived tables. Replace the original table using the results from the data transformation steps.
+
+```{python}
+quartuples = pd.Series(
+  data = 
+  [('min','Q1')
+  ,('Q1', 'Q2')
+  ,('Q2', 'Q3')
+  ,('Q3' ,'max')]
+  ,index =
+  ['min_q1'
+  ,'q1_q2'
+  ,'q2_q3'
+  ,'q3_max'])
+```
+
+```{python}
+def intermediateLighter(
+  conn: duckdb.duckdb, 
+  new_tables: list, 
+  x: dict, 
+  quartuples: None) -> None:
+  
+  for i in list(range(4)):
+    conn.sql(f"""
+    CREATE OR REPLACE TABLE '{new_tables[i]}' AS
+    SELECT
+      * EXCLUDE(light, hour_of_day),
+      AVG(light) AS '{quartuples.index[i]}'
+    FROM 
+      Analysis
+    WHERE 
+      hour_of_day BETWEEN 
+        '{x[quartuples.iloc[i][0]]}'::DOUBLE 
+        AND '{x[quartuples.iloc[i][1]]}'::DOUBLE
+    GROUP BY 
+      ALL
+    ORDER BY 
+      id ASC;
+    """)
+```
+
+#### Light
+
+```{python}
+new_tables = ['Light1', 'Light2', 'Light3', 'Light4']
+```
+
+```{python}
+intermediateLighter(conn, new_tables, x, quartuples)
+```
+
+#### Join Lux Data From Actigraphy Dataset With HBN Data
+
+Join the parquet dataset's aggregated lux/light columns with CSV derived data on the respective id columns. There were about 990 or so matching IDs.
+
+```{python}
+conn.sql(f"""
+CREATE OR REPLACE TABLE AggregatedAnalysis AS
+SELECT 
+  l1.*
+  ,l2.q1_q2
+  ,l3.q2_q3
+  ,l4.q3_max
+FROM 
+  Light1 l1
+LEFT JOIN
+  Light2 l2
+ON 
+  l1.id = l2.id
+LEFT JOIN
+  Light3 l3
+ON 
+  l1.id = l3.id
+LEFT JOIN
+  Light4 l4
+ON 
+  l1.id = l4.id;
+""")
+
+conn.sql(f"SELECT * FROM AggregatedAnalysis LIMIT 10;")
+```
+
+#### Internet Use Hours
+
+Join the sii data from the InternetUse table to the table of aggregated information.
+
+```{python}
+conn.sql(f"""
+CREATE OR REPLACE TABLE AggregatedAnalysis AS
+SELECT
+  aa.*
+  ,preint_eduhx_computerinternet_hoursday AS useHrs 
+FROM
+  AggregatedAnalysis aa
+LEFT JOIN 
+  InternetUse iu
+ON
+  aa.id = iu.id;
+""")
+```
+
+```{python}
+#| show: false
+#| column: body-outset
+#| layout-align: center
+import polars as pl
+
+conn.sql(f"SELECT * FROM AggregatedAnalysis LIMIT 10;").pl()
+```
+
+In the spirit of modular code, complex SQL operations were simplified with Python using a dictionary of unique CASE-WHEN and WHERE query lines.
+
+```{python}
+riskyDictionary = {
+  'Risk1': 
+    (f",CASE WHEN ph.physical_bmi < 18.5 THEN 'Underweight'"
+    ,f"WHEN ph.physical_bmi BETWEEN 18.5 AND 24.9 THEN 'Normal'"
+    ,f"WHEN ph.physical_bmi BETWEEN 25.0 AND 29.9 THEN 'Increased'"
+    ,f"WHEN ph.physical_bmi BETWEEN 30.0 AND 34.9 THEN 'High'"
+    ,f"WHEN ph.physical_bmi BETWEEN 35.0 AND 39.9 THEN 'Very High'"
+    ,f"WHEN ph.physical_bmi >= 40 THEN 'Extremely High'"
+    ,f"ph.physical_waist_circumference <= 35 AND aa.sex = '0'"),
+  'Risk2':
+    (f",CASE WHEN ph.physical_bmi < 18.5 THEN 'Underweight'"
+    ,f"WHEN ph.physical_bmi BETWEEN 18.5 AND 24.9 THEN 'Normal'"
+    ,f"WHEN ph.physical_bmi BETWEEN 25.0 AND 29.9 THEN 'High'"
+    ,f"WHEN ph.physical_bmi BETWEEN 30.0 AND 34.9 THEN 'Very High'"
+    ,f"WHEN ph.physical_bmi BETWEEN 35.0 AND 39.9 THEN 'Very High'"
+    ,f"WHEN ph.physical_bmi >= 40 THEN 'Extremely High'"
+    ,f"ph.physical_waist_circumference > 35 AND aa.sex = '0'"),
+  'Risk3':
+    (f",CASE WHEN ph.physical_bmi < 18.5 THEN 'Underweight'"
+    ,f"WHEN ph.physical_bmi BETWEEN 18.5 AND 24.9 THEN 'Normal'"
+    ,f"WHEN ph.physical_bmi BETWEEN 25.0 AND 29.9 THEN 'Increased'"
+    ,f"WHEN ph.physical_bmi BETWEEN 30.0 AND 34.9 THEN 'High'"
+    ,f"WHEN ph.physical_bmi BETWEEN 35.0 AND 39.9 THEN 'Very High'"
+    ,f"WHEN ph.physical_bmi >= 40 THEN 'Extremely High'"
+    ,f"ph.physical_waist_circumference <= 40 AND aa.sex = '1'"),
+  'Risk4':
+    (f",CASE WHEN ph.physical_bmi < 18.5 THEN 'Underweight'"
+    ,f"WHEN ph.physical_bmi BETWEEN 18.5 AND 24.9 THEN 'Normal'"
+    ,f"WHEN ph.physical_bmi BETWEEN 25.0 AND 29.9 THEN 'High'"
+    ,f"WHEN ph.physical_bmi BETWEEN 30.0 AND 34.9 THEN 'Very High'"
+    ,f"WHEN ph.physical_bmi BETWEEN 35.0 AND 39.9 THEN 'Very High'"
+    ,f"WHEN ph.physical_bmi >= 40 THEN 'Extremely High'"
+    ,f"ph.physical_waist_circumference > 40 AND aa.sex = '1'")}
+```
+
+```{python}
+
+riskyDf = pd.DataFrame(data = riskyDictionary)
+
+for key, value in riskyDf.items():
+  try:
+    conn.sql(f"""
+    CREATE OR REPLACE TABLE {key} AS
+    SELECT
+      aa.*
+      {value[0]}
+      {value[1]}
+      {value[2]}
+      {value[3]}
+      {value[4]}
+      {value[5]}
+      ELSE NULL
+      END AS risk_cat
+    ,risk_cat::disease_risk_enum AS risk_category
+    FROM 
+      Physical ph 
+    LEFT JOIN 
+      AggregatedAnalysis aa 
+    ON 
+      aa.id = ph.id
+    WHERE 
+      {value[6]}
+    ORDER BY 
+      aa.id ASC;""")
+    result = conn.execute(f"SELECT COUNT(*) FROM {key}").fetchone()
+    print(f"Successfully created table: {key}, Row count: {result[0]}")
+  except:
+    print(f"Error loading this table: {key}")
+```
+
+```{python}
+#| show: false
+
+conn.sql(f"SELECT * FROM Risk1 LIMIT 10;").pl()
+```
+
+
+```{python}
+conn.sql(f"""
+CREATE OR REPLACE TABLE 
+  DiseaseRiskDemographic AS
+SELECT * EXCLUDE(risk_cat) FROM Risk1
+UNION BY NAME
+SELECT * EXCLUDE(risk_cat) FROM Risk2
+UNION BY NAME
+SELECT * EXCLUDE(risk_cat) FROM Risk3
+UNION BY NAME 
+SELECT * EXCLUDE(risk_cat) FROM Risk4;
+""")
+drd = conn.sql(f"SELECT * FROM DiseaseRiskDemographic;").pl()
+drd.head()
+```
+
+```{python}
+drd.describe()
+```
+
+```{python}
+conn.sql(f"""
+CREATE OR REPLACE TABLE RiskCategorySummary AS
+SELECT 
+  risk_category
+  ,AVG(sii::INTEGER) AS sii
+  ,AVG(useHrs) AS useHrs
+  ,AVG(min_q1) AS min_q1
+  ,AVG(q1_q2) AS q1_q2
+  ,AVG(q2_q3) AS q2_q3
+  ,AVG(q3_max) AS q3_max
+FROM 
+  DiseaseRiskDemographic
+GROUP BY 
+  risk_category;
+""")
+rcs = conn.sql(f"SELECT * FROM RiskCategorySummary;").pl()
+rcs.head()
+```
+
+```{python}
+rcs.describe()
+```
+
+```{python}
+settings_info = conn.execute(f"SELECT * FROM duckdb_settings();").df()
+settings_info
+```
+
+```{python}
+#| file: 
+#| 
+conn.close()
+```
+
+
